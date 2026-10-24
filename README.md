@@ -2,7 +2,7 @@
 
 Deterministic, gender-neutral avatars from an id. One id, one mochi, always the same — like a token.
 
-**Demo:** https://isaaldair.github.io/mochi/#kai.dev
+**Demo:** https://isaacavilap.github.io/mochi/#kai.dev
 
 ![examples](docs/examples.png)
 
