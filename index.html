@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mochi</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg: #ffffff; --ink: #111111; --mute: #666666; --line: #e4e4e4; }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 15px/1.4 ui-sans-serif, system-ui, sans-serif; min-height: 100vh; display: grid; place-items: center; padding: 32px 16px; }
+  main { width: min(720px, 100%); display: grid; gap: 28px; }
+  h1 { font-size: 15px; font-weight: 600; letter-spacing: .02em; }
+  h1 span { color: var(--mute); font-weight: 400; }
+  .stage { display: grid; grid-template-columns: 240px 1fr; gap: 28px; align-items: center; }
+  #avatar svg { width: 240px; height: 240px; display: block; }
+  .panel { display: grid; gap: 14px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  button { font: inherit; font-size: 13px; color: var(--ink); background: none; border: 1px solid var(--line); border-radius: 99px; padding: 6px 12px; cursor: pointer; }
+  button:hover, button[aria-pressed="true"] { border-color: var(--ink); }
+  button.solid { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  code { font: 12px ui-monospace, monospace; color: var(--mute); word-break: break-all; }
+  .field { display: flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; font-size: 18px; }
+  .field:focus-within { border-color: var(--ink); }
+  .field span { color: var(--mute); }
+  .field input { font: inherit; border: 0; outline: 0; width: 100%; background: none; color: var(--ink); }
+  .field.bad { border-color: #d33; }
+  .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+  .grid button { padding: 0; border: 0; aspect-ratio: 1; transition: transform .15s; }
+  .grid button:hover { transform: translateY(-2px); }
+  .grid svg { width: 100%; height: 100%; display: block; }
+  .row { display: flex; justify-content: space-between; align-items: center; }
+  small { color: var(--mute); font-size: 12px; }
+  @media (max-width: 560px) {
+    .stage { grid-template-columns: 1fr; justify-items: center; }
+    .grid { grid-template-columns: repeat(4, 1fr); }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>mochi <span>— un id, un avatar · siempre el mismo</span></h1>
+
+  <section class="stage">
+    <div id="avatar"></div>
+    <div class="panel">
+      <label class="field"><span>@</span><input id="id" maxlength="15" autocomplete="off" spellcheck="false" placeholder="tu.id" aria-label="id"></label>
+      <small id="hint">1–15 caracteres: a-z, 0-9, punto, guion bajo</small>
+      <div class="chips">
+        <button id="svg">↓ svg</button>
+        <button id="png">↓ png</button>
+      </div>
+      <code id="code"></code>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="row"><small>ejemplos</small></div>
+    <div class="grid" id="grid"></div>
+  </section>
+</main>
+
+<script>
+const f = n => Math.round(n * 10) / 10;
+
+// sfc32 seeded with the full 128-bit seed, so the avatar space is not capped at 2^32.
+const rngFrom = hex => {
+  let [a, b, c, d] = [0, 8, 16, 24].map(i => parseInt(hex.slice(i, i + 8), 16));
+  const r = () => { a |= 0; b |= 0; c |= 0; d |= 0; const t = (a + b | 0) + d | 0; d = d + 1 | 0; a = b ^ b >>> 9; b = c + (c << 3) | 0; c = c << 21 | c >>> 11; c = c + t | 0; return (t >>> 0) / 4294967296; };
+  for (let i = 0; i < 15; i++) r();
+  return r;
+};
+
+// Harmonic palette: random base hue + color-wheel scheme. Head colors a/b; c is the eye ink and contrasts both.
+const palette = r => {
+  const h = r() * 360, o = [[0, 25, 50], [0, 180, 200], [0, 120, 240], [0, 160, 320], [0, 40, 180]][r() * 5 | 0], s = 55 + r() * 35;
+  const c = (off, l, sat = s) => `hsl(${f((h + off) % 360)} ${f(sat)}% ${f(l)}%)`;
+  return r() < .35
+    ? { bg: c(o[0], 9 + r() * 7, s * .45), a: c(o[1], 64 + r() * 10), b: c(o[2], 76 + r() * 10), c: c(o[0], 10, s * .5) }
+    : { bg: c(o[0], 88 + r() * 7, s * .7), a: c(o[1], 58 + r() * 10), b: c(o[2], 72 + r() * 10), c: c(o[0], 13 + r() * 6, s * .6) };
+};
+
+// Closed Catmull-Rom curve through points, for organic blobs.
+const smooth = pts => {
+  const n = pts.length, P = i => pts[(i + n) % n];
+  let d = `M${f(P(0)[0])} ${f(P(0)[1])}`;
+  for (let i = 0; i < n; i++) {
+    const [p0, p1, p2, p3] = [P(i - 1), P(i), P(i + 1), P(i + 2)];
+    d += `C${f(p1[0] + (p2[0] - p0[0]) / 6)} ${f(p1[1] + (p2[1] - p0[1]) / 6)} ${f(p2[0] - (p3[0] - p1[0]) / 6)} ${f(p2[1] - (p3[1] - p1[1]) / 6)} ${f(p2[0])} ${f(p2[1])}`;
+  }
+  return d + 'Z';
+};
+const blob = (r, rr, cx, cy, R, n = 7 + (r() * 3 | 0)) => smooth(Array.from({ length: n }, (_, i) => { const a = i / n * Math.PI * 2, d = R * rr(.85, 1.12); return [cx + Math.cos(a) * d, cy + Math.sin(a) * d]; }));
+const star = (n, R, ri, cx = 100, cy = 112) => Array.from({ length: n * 2 }, (_, i) => { const a = -Math.PI / 2 + i / (n * 2) * Math.PI * 2, d = i % 2 ? ri : R; return `${i ? 'L' : 'M'}${f(cx + Math.cos(a) * d)} ${f(cy + Math.sin(a) * d)}`; }).join('') + 'Z';
+const rounded = (pts, k = .25) => { const n = pts.length, P = i => pts[(i + n) % n]; let d = ''; for (let i = 0; i < n; i++) { const a = P(i - 1), b = P(i), c = P(i + 1); d += `${i ? 'L' : 'M'}${f(b[0] + (a[0] - b[0]) * k)} ${f(b[1] + (a[1] - b[1]) * k)}Q${f(b[0])} ${f(b[1])} ${f(b[0] + (c[0] - b[0]) * k)} ${f(b[1] + (c[1] - b[1]) * k)}`; } return d + 'Z'; };
+
+// Head silhouettes, centered near (100,110): [draw, hasEars]. Bare shapes, used both as fill and as clip.
+const HEADS = [
+  [({ rr }) => `<circle cx="100" cy="110" r="${f(rr(54, 62))}"/>`],
+  [({ rr }) => { const w = rr(108, 124), h = rr(104, 120); return `<rect x="${f(100 - w / 2)}" y="${f(110 - h / 2)}" width="${f(w)}" height="${f(h)}" rx="${f(rr(30, 46))}"/>`; }],
+  [({ rr }) => `<ellipse cx="100" cy="110" rx="${f(rr(46, 54))}" ry="${f(rr(60, 66))}"/>`],
+  [({ r, rr }) => `<path d="${blob(r, rr, 100, 110, rr(54, 62))}"/>`],
+  [({ rr }) => { const R = rr(52, 58), w = 2 * R / 3; return `<path d="M${f(100 - R)} 104A${f(R)} ${f(R)} 0 0 1 ${f(100 + R)} 104V164${`q${f(-w / 2)} 16 ${f(-w)} 0`.repeat(3)}Z"/>`; }],
+  [({ rr }) => { const e = rr(40, 50); return `<circle cx="100" cy="114" r="56"/><path d="M50 98L${f(56 - e / 6)} ${f(60 - e)}L94 66Z"/><path d="M150 98L${f(144 + e / 6)} ${f(60 - e)}L106 66Z"/>`; }, 1],
+  [({ rr }) => { const er = rr(15, 21); return `<circle cx="100" cy="114" r="56"/><circle cx="${f(56 + er / 3)}" cy="66" r="${f(er)}"/><circle cx="${f(144 - er / 3)}" cy="66" r="${f(er)}"/>`; }, 1],
+  [({ rr }) => { const t = rr(40, 52); return `<path d="M100 ${f(t)}C130 70 158 100 158 128A58 58 0 0 1 42 128C42 100 70 70 100 ${f(t)}Z"/>`; }],
+  [({ rr }) => `<circle cx="100" cy="114" r="${f(rr(44, 50))}"/><circle cx="60" cy="126" r="${f(rr(28, 34))}"/><circle cx="140" cy="126" r="${f(rr(28, 34))}"/><circle cx="76" cy="84" r="${f(rr(24, 30))}"/><circle cx="124" cy="80" r="${f(rr(26, 32))}"/>`],
+  [({ rr }) => { const y = rr(14, 30), t = f(rr(4, 14)); return `<circle cx="100" cy="122" r="52"/><rect x="64" y="${f(y)}" width="24" height="84" rx="12" transform="rotate(-${t} 76 90)"/><rect x="112" y="${f(y)}" width="24" height="84" rx="12" transform="rotate(${t} 124 90)"/>`; }, 1],
+  [({ rr }) => { const h = rr(84, 96); return `<rect x="34" y="${f(108 - h / 2)}" width="132" height="${f(h)}" rx="${f(h / 2)}"/>`; }],
+  [({ r, rr }) => { const n = 6 + (r() * 4 | 0), o = rr(0, 6.3), pr = rr(18, 24); return `<circle cx="100" cy="110" r="46"/>` + Array.from({ length: n }, (_, i) => { const a = o + i / n * Math.PI * 2; return `<circle cx="${f(100 + Math.cos(a) * 52)}" cy="${f(110 + Math.sin(a) * 52)}" r="${f(pr)}"/>`; }).join(''); }, 1],
+  // Cartoon-inspired, kept abstract: tall cat, floppy ears, star, egg, gem, fish, tv, tall capsule, dome.
+  [({ rr }) => { const e = rr(26, 38); return `<rect x="54" y="58" width="92" height="108" rx="42"/><path d="M58 92L${f(50 - e / 6)} ${f(58 - e)}L92 62Z"/><path d="M142 92L${f(150 + e / 6)} ${f(58 - e)}L108 62Z"/>`; }, 1],
+  [({ rr }) => { const h = rr(84, 100), t = f(rr(2, 8)); return `<circle cx="100" cy="112" r="54"/><rect x="18" y="66" width="28" height="${f(h)}" rx="14" transform="rotate(${t} 32 66)"/><rect x="154" y="66" width="28" height="${f(h)}" rx="14" transform="rotate(-${t} 168 66)"/>`; }, 1],
+  [({ rr }) => { const ri = rr(32, 40); return `<path d="${star(5, 64, ri)}"/>`; }],
+  [({ rr }) => { const b = f(rr(164, 176)); return `<path d="M100 ${b}C70 152 42 122 42 92A58 58 0 0 1 158 92C158 122 130 152 100 ${b}Z"/>`; }],
+  [({ rr }) => { const d = rr(58, 64), o = rr(0, 1) < .5 ? 0 : Math.PI / 6; return `<path d="${rounded(Array.from({ length: 6 }, (_, i) => { const a = o + i / 6 * Math.PI * 2; return [100 + Math.cos(a) * d, 112 + Math.sin(a) * d]; }), .2)}"/>`; }],
+  [({ rr }) => { const fh = rr(22, 36); return `<ellipse cx="100" cy="116" rx="48" ry="56"/><path d="M84 66Q94 ${f(62 - fh)} 118 ${f(58 - fh / 2)}L116 68Z"/>`; }, 1],
+  [({ rr }) => { const h = rr(104, 118); return `<rect x="42" y="${f(112 - h / 2)}" width="116" height="${f(h)}" rx="${f(rr(10, 16))}"/>`; }],
+  [({ rr }) => { const y = rr(34, 48); return `<rect x="62" y="${f(y)}" width="76" height="${f(182 - y)}" rx="38"/>`; }],
+  [({ rr }) => { const j = f(rr(150, 166)); return `<path d="M40 ${j}V110A60 60 0 0 1 160 110V${j}q0 10-10 10H50q-10 0-10-10Z"/>`; }],
+  // Pure geometry, rounded by the Catmull-Rom pass: triangle, pentagon, kite, trapezoid, peanut, mushroom.
+  [({ rr }) => { const w = rr(60, 70); return `<path d="${rounded([[100, rr(36, 46)], [100 + w, 166], [100 - w, 166]], .3)}"/>`; }],
+  [({ rr }) => { const d = rr(60, 66), o = rr(0, 1) < .5 ? -Math.PI / 2 : Math.PI / 2; return `<path d="${rounded(Array.from({ length: 5 }, (_, i) => { const a = o + i / 5 * Math.PI * 2; return [100 + Math.cos(a) * d, 114 + Math.sin(a) * d]; }), .22)}"/>`; }],
+  [({ rr }) => { const w = rr(50, 60), y = rr(96, 112); return `<path d="${rounded([[100, 40], [100 + w, y], [100, 180], [100 - w, y]], .28)}"/>`; }],
+  [({ rr }) => { const t = rr(32, 44), b = rr(56, 64), flip = rr(0, 1) < .5; return `<path d="${rounded(flip ? [[100 - b, 50], [100 + b, 50], [100 + t, 168], [100 - t, 168]] : [[100 - t, 50], [100 + t, 50], [100 + b, 168], [100 - b, 168]], .3)}"/>`; }],
+  [({ rr }) => { const r1 = rr(38, 44), r2 = rr(44, 50); return `<circle cx="100" cy="${f(50 + r1)}" r="${f(r1)}"/><circle cx="100" cy="${f(176 - r2)}" r="${f(r2)}"/><rect x="${f(100 - r1 * .8)}" y="${f(50 + r1)}" width="${f(r1 * 1.6)}" height="${f(126 - r1 - r2)}"/>`; }],
+  [({ rr }) => { const cw = rr(66, 74), ch = rr(50, 60), sw = rr(34, 42); return `<path d="M${f(100 - cw)} 116A${f(cw)} ${f(ch)} 0 0 1 ${f(100 + cw)} 116q0 10-10 10H${f(110 + sw - 10)}V168a${f(sw)} 20 0 0 1 -${f(sw * 2)} 0V126H${f(90 - cw + 10)}q-10 0-10-10Z"/>`; }],
+];
+
+// Surface patterns painted inside the head (clipped). Only a/b (+ translucent white), so the eyes always read.
+const STYLES = {
+  liso: () => '',
+  degradado: ({ rr, p, id }) => `<defs><linearGradient id="${id}y" gradientTransform="rotate(${f(rr(0, 360))} .5 .5)"><stop offset="0" stop-color="${p.a}"/><stop offset="1" stop-color="${p.b}"/></linearGradient></defs><rect width="200" height="200" fill="url(#${id}y)"/>`,
+  mármol: ({ rr, p, id }) =>
+    `<defs><filter id="${id}z" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${f(rr(10, 18))}"/></filter></defs><g filter="url(#${id}z)">`
+    + [p.b, '#fff', p.b].map((col, i) => `<ellipse cx="${f(rr(50, 150))}" cy="${f(rr(50, 170))}" rx="${f(rr(25, 55))}" ry="${f(rr(15, 35))}" fill="${col}" opacity="${i === 1 ? .35 : .9}" transform="rotate(${f(rr(0, 180))} 100 110)"/>`).join('') + `</g>`,
+  anillos: ({ rr, p }) => {
+    const cx = rr(30, 170), cy = rr(40, 180), w = rr(6, 12);
+    return `<g fill="none" stroke="${p.b}" stroke-width="${f(w)}">` + Array.from({ length: 12 }, (_, i) => `<circle cx="${f(cx)}" cy="${f(cy)}" r="${f(w + i * w * 2.2)}"/>`).join('') + `</g>`;
+  },
+  rayas: ({ rr, p }) => {
+    const w = rr(7, 16);
+    return `<g fill="${p.b}" transform="rotate(${f(rr(0, 180))} 100 110)">` + Array.from({ length: 16 }, (_, i) => `<rect x="-60" y="${f(-60 + i * w * 2)}" width="320" height="${f(w)}"/>`).join('') + `</g>`;
+  },
+  puntos: ({ rr, p }) => {
+    const g = rr(14, 22), rad = rr(2.5, 5), ox = rr(0, g), out = [];
+    for (let y = ox; y < 200; y += g) for (let x = ox; x < 200; x += g) out.push(`<circle cx="${f(x)}" cy="${f(y)}" r="${f(rad)}"/>`);
+    return `<g fill="${p.b}">${out.join('')}</g>`;
+  },
+  bauhaus: ({ rr, p }) =>
+    `<circle cx="${f(rr(40, 160))}" cy="${f(rr(130, 190))}" r="${f(rr(30, 55))}" fill="${p.b}"/>`
+    + `<rect x="${f(rr(20, 120))}" y="${f(rr(20, 70))}" width="${f(rr(40, 80))}" height="${f(rr(30, 60))}" fill="${p.b}" opacity=".6" transform="rotate(${f(rr(0, 90))} 100 100)"/>`,
+  truchet: ({ r, p }) => {
+    const s = 200 / 3;
+    let out = '';
+    for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) {
+      const k = r() * 4 | 0, C = [[x * s, y * s], [x * s + s, y * s], [x * s + s, y * s + s], [x * s, y * s + s]], [c, a, b] = [C[k], C[(k + 1) % 4], C[(k + 3) % 4]];
+      out += `<path d="M${f(c[0])} ${f(c[1])}L${f(a[0])} ${f(a[1])}A${f(s)} ${f(s)} 0 0 1 ${f(b[0])} ${f(b[1])}Z"/>`;
+    }
+    return `<g fill="${p.b}">${out}</g>`;
+  },
+  mitad: ({ rr, p }) => `<rect x="-60" y="${f(rr(96, 140))}" width="320" height="200" fill="${p.b}" transform="rotate(${f(rr(-35, 35))} 100 110)"/>`,
+  cuadros: ({ rr, p }) => {
+    const s = rr(16, 28), out = [];
+    for (let i = 0; i * s < 300; i++) for (let j = 0; j * s < 300; j++) if ((i + j) % 2) out.push(`<rect x="${f(i * s - 50)}" y="${f(j * s - 50)}" width="${f(s)}" height="${f(s)}"/>`);
+    return `<g fill="${p.b}" transform="rotate(${f(rr(0, 45))} 100 110)">${out.join('')}</g>`;
+  },
+  ondas: ({ rr, p }) => {
+    const w = rr(18, 30), amp = rr(5, 10), gap = rr(16, 26);
+    return `<g fill="none" stroke="${p.b}" stroke-width="${f(rr(5, 9))}" stroke-linecap="round" transform="rotate(${f(rr(-20, 20))} 100 110)">`
+      + Array.from({ length: 14 }, (_, i) => `<path d="M-40 ${f(-20 + i * gap)}q${f(w / 2)} ${f(-amp)} ${f(w)} 0${` t${f(w)} 0`.repeat(12)}"/>`).join('') + `</g>`;
+  },
+  confeti: ({ r, rr, p }) => Array.from({ length: 26 }, () => {
+    const x = f(rr(30, 170)), y = f(rr(40, 180)), col = r() < .6 ? p.b : '#fff';
+    return r() < .5 ? `<circle cx="${x}" cy="${y}" r="${f(rr(2, 5))}" fill="${col}"/>` : `<rect x="${x}" y="${y}" width="${f(rr(4, 9))}" height="${f(rr(3, 5))}" rx="1.5" fill="${col}" transform="rotate(${f(rr(0, 180))} ${x} ${y})"/>`;
+  }).join(''),
+  escamas: ({ rr, p }) => {
+    const s = rr(12, 18), out = [];
+    for (let row = 0, y = 30; y < 210; row++, y += s * .8) for (let x = row % 2 ? s : 0; x < 220; x += s * 2) out.push(`<circle cx="${f(x)}" cy="${f(y)}" r="${f(s)}"/>`);
+    return `<g fill="${p.a}" stroke="${p.b}" stroke-width="4">${out.join('')}</g>`;
+  },
+  antifaz: ({ rr, p }) => `<rect x="-60" y="${f(rr(72, 80))}" width="320" height="${f(rr(52, 64))}" fill="${p.b}" transform="rotate(${f(rr(-8, 8))} 100 106)"/>`,
+  parche: ({ r, rr, p }) => `<circle cx="${r() < .5 ? 84 : 116}" cy="106" r="${f(rr(24, 30))}" fill="${p.b}"/>`,
+  manchas: ({ r, rr, p }) => `<g fill="${p.b}">` + Array.from({ length: 4 + (r() * 4 | 0) }, () => `<path d="${blob(r, rr, rr(40, 160), rr(50, 180), rr(8, 22))}"/>`).join('') + `</g>`,
+};
+const NAMES = Object.keys(STYLES);
+
+// Accessories: [behind head, over head]. Color b, never the eye ink. Eared heads only get floating ones.
+const ACC = [
+  ({ rr, p }) => { const ax = rr(88, 114), ty = rr(20, 32); return [`<path d="M100 72Q${f(rr(86, 114))} ${f((72 + ty) / 2)} ${f(ax)} ${f(ty)}" stroke="${p.b}" stroke-width="4" fill="none" stroke-linecap="round"/><circle cx="${f(ax)}" cy="${f(ty)}" r="7" fill="${p.b}"/>`, '']; },
+  ({ rr, p }) => { const t = f(rr(-15, 15)); return [`<g fill="${p.b}" transform="rotate(${t} 100 70)"><path d="M100 70V38" stroke="${p.b}" stroke-width="4" stroke-linecap="round"/><path d="M100 42q-24-16-30 4q18 10 30-4Z"/><path d="M100 46q24-16 30 4q-18 10-30-4Z"/></g>`, '']; },
+  ({ rr, p }) => { const h = rr(28, 42); return [`<g fill="${p.b}"><path d="M70 72q-14-${f(h * .7)} 2-${f(h)}q-4 ${f(h * .55)} 16 ${f(h * .8)}Z"/><path d="M130 72q14-${f(h * .7)}-2-${f(h)}q4 ${f(h * .55)}-16 ${f(h * .8)}Z"/></g>`, '']; },
+  ({ rr, p }) => ['', `<ellipse cx="100" cy="${f(rr(26, 34))}" rx="${f(rr(26, 34))}" ry="8" fill="none" stroke="${p.b}" stroke-width="5"/>`],
+  ({ p }) => [`<path d="M70 70L72 34L86 50L100 28L114 50L128 34L130 70Z" fill="${p.b}" stroke="${p.b}" stroke-width="4" stroke-linejoin="round"/>`, ''],
+  ({ rr, p }) => { const h = rr(18, 30); return [`<path d="M84 72q-4-${f(h)} 6-${f(h + 8)}q0 ${f(h * .6)} 10 ${f(h)}q-2-${f(h * .9)} 10-${f(h + 4)}q2 ${f(h * .8)} 8 ${f(h + 12)}Z" fill="${p.b}"/>`, '']; },
+  ({ p }) => [`<path d="M38 112A62 62 0 0 1 162 112" fill="none" stroke="${p.b}" stroke-width="6"/>`, `<g fill="${p.b}"><rect x="30" y="96" width="16" height="32" rx="8"/><rect x="154" y="96" width="16" height="32" rx="8"/></g>`],
+  ({ p }) => ['', `<g fill="none" stroke="${p.c}" stroke-width="4"><rect x="64" y="80" width="34" height="52" rx="16"/><rect x="102" y="80" width="34" height="52" rx="16"/><path d="M98 100h4M64 100H50M136 100h14"/></g>`],
+  ({ rr, p }) => ['', `<path d="M${f(100 - rr(10, 14))} 128L100 ${f(rr(140, 148))}L${f(100 + rr(10, 14))} 128Z" fill="${p.b}"/>`],
+  ({ rr, p }) => { const x = rr(0, 1) < .5 ? 66 : 134, t = f(rr(-40, 40)); return ['', `<g transform="rotate(${t} ${x} 136)" fill="${p.b}"><rect x="${x - 13}" y="131" width="26" height="10" rx="4"/><rect x="${x - 4}" y="131" width="8" height="10" fill="#fff" opacity=".5"/></g>`]; },
+];
+const FLOATING = [3, 7, 8, 9];
+
+// Grok-bot-style face: the same two vertical capsule eyes (3:1) on every avatar, no mouth.
+// Eye shape, size and position never change; head, pattern, palette, accessory, tilt and cheeks do.
+// Animation lives inside the SVG, so downloaded SVGs move too. Per-avatar negative delays keep a grid from blinking in sync.
+const EYES = (c, look, blink) => `<g class="look" style="animation-delay:-${look}s"><g class="eyes" fill="${c}" style="animation-delay:-${blink}s"><rect x="78" y="88" width="12" height="36" rx="6"/><rect x="110" y="88" width="12" height="36" rx="6"/></g></g>`;
+const ANIM = `<style>@media (prefers-reduced-motion: no-preference) {
+.eyes { transform-box: fill-box; transform-origin: center; animation: mochi-blink 4.2s infinite; }
+.look { animation: mochi-look 7s infinite ease-in-out; }
+@keyframes mochi-blink { 0%, 90%, 100% { transform: scaleY(1) } 93% { transform: scaleY(.08) } 96% { transform: scaleY(1) } }
+@keyframes mochi-look { 0%, 28%, 88%, 100% { transform: translate(0, 0) } 34%, 52% { transform: translate(6px, -1px) } 58%, 80% { transform: translate(-6px, 2px) } }
+}</style>`;
+const CHEEKS = [
+  () => '',
+  c => `<g class="cheeks" fill="${c}" opacity=".18"><ellipse cx="68" cy="132" rx="10" ry="6"/><ellipse cx="132" cy="132" rx="10" ry="6"/></g>`,
+  c => `<g class="cheeks" fill="${c}" opacity=".35">${[62, 70, 66, 130, 138, 134].map((x, i) => `<circle cx="${x}" cy="${i % 3 === 2 ? 136 : 130}" r="2.2"/>`).join('')}</g>`,
+];
+
+// Silhouette outline: the same drawing in ink, fat-stroked, under the real one. Unions multi-part heads into one clean shape.
+const outline = (svg, c) => svg && `<g fill="${c}" stroke="${c}" stroke-width="10" stroke-linejoin="round" stroke-linecap="round">${svg.replace(/fill="(?!none)[^"]*"/g, `fill="${c}"`).replace(/stroke="[^"]*"/g, `stroke="${c}"`).replace(/stroke-width="([\d.]+)"/g, (_, w) => `stroke-width="${+w + 10}"`).replace(/ opacity="[^"]*"/g, '')}</g>`;
+
+// Ids are "u_" + seed (+ a non-hex suffix) so many SVGs can share one page.
+const render = ({ style, seed }) => {
+  const r = rngFrom(seed), rr = (a, b) => a + r() * (b - a), p = palette(r), id = 'u_' + seed.slice(0, 12);
+  const [drawHead, eared] = HEADS[r() * HEADS.length | 0], head = drawHead({ r, rr }), tilt = f(rr(-10, 10));
+  const pool = eared ? FLOATING : ACC.map((_, i) => i), [back, front] = r() < .45 ? ACC[pool[r() * pool.length | 0]]({ rr, p }) : ['', ''];
+  const cheeks = CHEEKS[r() < .5 ? 0 : r() < .7 ? 1 : 2](p.c), blink = f(rr(0, 4.2)), look = f(rr(0, 7));
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">${ANIM}<defs><clipPath id="${id}x">${head}</clipPath></defs>`
+    + `<g class="face" transform="rotate(${tilt} 100 110)">${outline(back, p.c)}${outline(head, p.c)}${outline(front, p.c)}<g class="acc">${back}</g><g class="head" fill="${p.a}">${head}</g><g clip-path="url(#${id}x)" opacity=".75">${STYLES[style]({ r, rr, p, id })}</g>`
+    + `${cheeks}${EYES(p.c, look, blink)}<g class="acc">${front}</g></g></svg>`;
+};
+
+// Id → avatar. cyrb128 hashes the normalized id into 128 bits; the same id always draws the same avatar.
+const ID_RE = /^[a-z0-9._]{1,15}$/;
+const normalize = s => s.trim().replace(/^@/, '').toLowerCase();
+const seedOf = s => {
+  let h1 = 1779033703, h2 = 3144134277, h3 = 1013904242, h4 = 2773480762;
+  for (let i = 0; i < s.length; i++) { const k = s.charCodeAt(i); h1 = h2 ^ Math.imul(h1 ^ k, 597399067); h2 = h3 ^ Math.imul(h2 ^ k, 2869860233); h3 = h4 ^ Math.imul(h3 ^ k, 951274213); h4 = h1 ^ Math.imul(h4 ^ k, 2716044179); }
+  h1 = Math.imul(h3 ^ h1 >>> 18, 597399067); h2 = Math.imul(h4 ^ h2 >>> 22, 2869860233); h3 = Math.imul(h1 ^ h3 >>> 17, 951274213); h4 = Math.imul(h2 ^ h4 >>> 19, 2716044179);
+  return [h1, h2, h3, h4].map(x => (x >>> 0).toString(16).padStart(8, '0')).join('');
+};
+const avatarOf = id => { const seed = seedOf(id), k = parseInt(seed.slice(0, 8), 16); return { id, seed, style: k % 5 < 2 ? 'liso' : NAMES[k % NAMES.length] }; };
+
+const $ = id => document.getElementById(id);
+let current;
+const show = id => {
+  current = avatarOf(id);
+  $('avatar').innerHTML = render(current);
+  $('code').textContent = `@${id} · ${current.style} · ${current.seed.slice(0, 12)}`;
+  history.replaceState(null, '', `#${encodeURIComponent(id)}`);
+};
+
+const EXAMPLES = ['mochi', 'kai.dev', 'sol_93', 'nube', 'pixel.io', 'mar', 'tostada', 'nico_r', 'luna.m', 'zed', 'cafe.frio', 'robo7'];
+$('grid').innerHTML = EXAMPLES.map(id => `<button data-id="${id}" aria-label="@${id}" title="@${id}">${render(avatarOf(id))}</button>`).join('');
+$('grid').onclick = e => { const b = e.target.closest('button'); if (b) { $('id').value = b.dataset.id; show(b.dataset.id); } };
+
+$('id').oninput = () => {
+  const id = normalize($('id').value), ok = ID_RE.test(id);
+  $('id').parentElement.classList.toggle('bad', !ok && id.length > 0);
+  if (ok) show(id);
+};
+
+const save = (blob, ext) => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `mochi-${current.id}.${ext}`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+$('svg').onclick = () => save(new Blob([render(current)], { type: 'image/svg+xml' }), 'svg');
+$('png').onclick = () => {
+  const img = new Image(), cv = document.createElement('canvas');
+  cv.width = cv.height = 1024;
+  img.onload = () => { cv.getContext('2d').drawImage(img, 0, 0, 1024, 1024); cv.toBlob(b => save(b, 'png')); };
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(render(current));
+};
+
+// A shared link (#id) reopens that exact avatar.
+const linked = normalize(decodeURIComponent(location.hash.slice(1)));
+const start = ID_RE.test(linked) ? linked : EXAMPLES[0];
+$('id').value = start;
+show(start);
+
+// Self-check: same id draws the same thing; case/@ do not matter; distinct ids differ.
+console.assert(render(avatarOf('kai.dev')) === render(avatarOf(normalize('@Kai.Dev '))), 'same id must render the same');
+console.assert(new Set(Array.from({ length: 2000 }, (_, i) => seedOf('u' + i))).size === 2000, 'seeds must not collide');
+</script>
+</body>
+</html>
